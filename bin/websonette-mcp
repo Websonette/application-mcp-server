@@ -1,0 +1,76 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+
+use Websonette\ApplicationMcpServer\Console\Context;
+use Websonette\ApplicationMcpServer\Console\KeyGenerator;
+use Websonette\ApplicationMcpServer\Console\SkillInstaller;
+use Websonette\ApplicationMcpServer\Persistence\SchemaMigrator;
+
+$autoload = $_composer_autoload_path ?? dirname(__DIR__) . '/vendor/autoload.php';
+require $autoload;
+try {
+    $args = $argv;
+    array_shift($args);
+    $command = array_shift($args) ?? 'help';
+    $options = [];
+    foreach ($args as $arg) {
+        if (!str_starts_with($arg, '--')) { throw new InvalidArgumentException('Options must use --name=value.'); }
+        [$name, $value] = array_pad(explode('=', substr($arg, 2), 2), 2, true);
+        $options[$name] = $value;
+    }
+    if ($command === 'help') {
+        echo "websonette-mcp\n\n";
+        echo "keys --directory=/private/path\n";
+        echo "skill:install --project=/project [--target=.agents/skills] [--dry-run]\n";
+        echo "status|migrate --bootstrap=/path/mcp-bootstrap.php\n";
+        echo "client:register --bootstrap=... --id=... --name=... --redirect=https://... --scopes=read,write\n";
+        echo "client:disconnect --bootstrap=... --id=...\n";
+        echo "token:issue --bootstrap=... --id=... --scopes=read [--user=...] (development only)\n";
+        exit(0);
+    }
+    if ($command === 'keys') {
+        (new KeyGenerator())->generate((string) ($options['directory'] ?? throw new InvalidArgumentException('--directory is required.')));
+        echo "OAuth keys created. Keep the directory outside the public web root.\n";
+        exit(0);
+    }
+    if ($command === 'skill:install') {
+        $paths = (new SkillInstaller())->install((string) ($options['project'] ?? getcwd()), (string) ($options['target'] ?? '.agents/skills'), isset($options['dry-run']));
+        echo implode("\n", $paths) . "\n";
+        exit(0);
+    }
+    $bootstrap = (string) ($options['bootstrap'] ?? 'mcp-bootstrap.php');
+    if (!is_file($bootstrap)) { throw new RuntimeException('Application bootstrap is missing. It must return Console\\Context.'); }
+    $context = require $bootstrap;
+    if (!$context instanceof Context) { throw new RuntimeException('Bootstrap must return Console\\Context.'); }
+    $migrator = new SchemaMigrator($context->store->pdo);
+    switch ($command) {
+        case 'status':
+            echo $migrator->installed() ? "Schema version 1 installed.\n" : "Schema is not installed. Run migrate explicitly.\n";
+            break;
+        case 'migrate':
+            $migrator->migrate();
+            echo "Schema version 1 installed.\n";
+            break;
+        case 'client:register':
+            $context->admin->registerClient((string) ($options['id'] ?? ''), (string) ($options['name'] ?? ''),
+                isset($options['redirect']) ? [(string) $options['redirect']] : [],
+                explode(',', (string) ($options['scopes'] ?? '')));
+            echo "Public client registered.\n";
+            break;
+        case 'client:disconnect':
+            $context->admin->disconnectClient((string) ($options['id'] ?? throw new InvalidArgumentException('--id is required.')));
+            echo "Client disconnected and its grants revoked.\n";
+            break;
+        case 'token:issue':
+            echo $context->tokens->issue((string) ($options['id'] ?? ''), explode(',', (string) ($options['scopes'] ?? '')),
+                isset($options['user']) ? (string) $options['user'] : null) . "\n";
+            break;
+        default:
+            throw new InvalidArgumentException('Unknown command. Run help.');
+    }
+} catch (Throwable $e) {
+    // Command errors are operator-facing, but do not dump secrets, arguments or a stack trace.
+    fwrite(STDERR, "Command failed: " . $e->getMessage() . "\n");
+    exit(1);
+}

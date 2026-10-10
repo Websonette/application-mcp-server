@@ -1,0 +1,38 @@
+name: Demo HTTP smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: pdo_sqlite, openssl, curl
+          coverage: none
+          tools: composer:v2
+      - run: composer install --no-interaction --prefer-dist
+      - run: php examples/dev-app/setup.php
+      - name: Exercise actual HTTP consent and MCP
+        env:
+          MCP_DEMO_PASSWORD: test-only-demo-password-123
+        run: |
+          set -euo pipefail
+          php -S 127.0.0.1:8080 examples/dev-app/router.php > "$RUNNER_TEMP/mcp-demo.log" 2>&1 &
+          TASK_DEMO_PID=$!
+          trap 'kill "$TASK_DEMO_PID" 2>/dev/null || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:8080/.well-known/oauth-protected-resource/mcp > /dev/null; then
+              break
+            fi
+            sleep 0.2
+          done
+          php tests/Support/demo-smoke.php
