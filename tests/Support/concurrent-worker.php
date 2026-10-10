@@ -11,6 +11,7 @@ use Websonette\ApplicationMcpServer\Tool\Registry;
 use Websonette\ApplicationMcpServer\Tool\Risk;
 
 require dirname(__DIR__, 2) . '/vendor/autoload.php';
+if (!isset($argv) || count($argv) !== 5) { fwrite(STDERR, "Expected worker arguments.\n"); exit(2); }
 [$script, $dsn, $barrier, $client, $counter] = $argv;
 $pdo = new PDO($dsn, getenv('MCP_TEST_USER') ?: null, getenv('MCP_TEST_PASSWORD') ?: null);
 if ($pdo->getAttribute(PDO::ATTR_DRIVER_NAME) === 'sqlite') { $pdo->exec('PRAGMA busy_timeout = 5000'); }
