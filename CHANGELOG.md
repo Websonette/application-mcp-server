@@ -3,6 +3,7 @@
 ## 0.2.1
 
 - CLI status and migrate report the current schema version rather than the old version-1 label.
+- Metadata fetching releases CurlHandle without the PHP-8.5-deprecated curl_close call.
 
 ## 0.2.0
 

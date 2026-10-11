@@ -46,7 +46,7 @@ final readonly class HttpsMetadataFetcher implements MetadataFetcher
         try {
             $ok = curl_exec($curl);
             if ($ok === false || curl_getinfo($curl, CURLINFO_RESPONSE_CODE) !== 200) { throw new \RuntimeException('Client metadata fetch failed.'); }
-        } finally { curl_close($curl); }
+        } finally { unset($curl); }
         $document = json_decode($body, true, 16, JSON_THROW_ON_ERROR);
         if (!is_array($document) || array_is_list($document)) { throw new \InvalidArgumentException('Client metadata must be a JSON object.'); }
         /** @var array<string, mixed> $document */
