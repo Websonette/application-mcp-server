@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- CLI status and migrate report the current schema version rather than the old version-1 label.
+
 ## 0.2.0
 
 - Automatic Nette OAuth, key material, identity/consent, bearer and console service wiring; legacy explicit wiring remains supported.

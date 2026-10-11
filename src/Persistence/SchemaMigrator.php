@@ -5,6 +5,8 @@ namespace Websonette\ApplicationMcpServer\Persistence;
 
 final readonly class SchemaMigrator
 {
+    public const VERSION = 2;
+
     public function __construct(private \PDO $pdo)
     {
     }
@@ -12,8 +14,8 @@ final readonly class SchemaMigrator
     public function installed(): bool
     {
         try {
-            $statement = $this->pdo->prepare('SELECT version FROM mcp_schema_migrations WHERE version = 2');
-            $statement->execute();
+            $statement = $this->pdo->prepare('SELECT version FROM mcp_schema_migrations WHERE version = :version');
+            $statement->execute(['version' => self::VERSION]);
             return $statement->fetchColumn() !== false;
         } catch (\PDOException) {
             return false;
@@ -50,7 +52,7 @@ final readonly class SchemaMigrator
                 throw new \LogicException('Incompatible legacy MCP schema. Back up and migrate it explicitly before installing the package schema.', previous: $error);
             }
         }
-        foreach ([1, 2] as $version) {
+        foreach (range(1, self::VERSION) as $version) {
             try {
                 $check = $this->pdo->prepare('SELECT version FROM mcp_schema_migrations WHERE version = :version');
                 $check->execute(['version' => $version]);

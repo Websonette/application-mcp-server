@@ -36,7 +36,7 @@ final class McpExtension extends CompilerExtension
         return Expect::structure([
             'baseUrl' => Expect::string()->required(),
             'name' => Expect::string('Websonette application'),
-            'version' => Expect::string('0.2.0'),
+            'version' => Expect::string('0.2.1'),
             'development' => Expect::bool(false),
             'allowedOrigins' => Expect::listOf('string')->default([]),
             'maxBodyBytes' => Expect::int(1048576)->min(1),

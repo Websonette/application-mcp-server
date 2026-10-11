@@ -47,11 +47,11 @@ try {
     $migrator = new SchemaMigrator($context->store->pdo);
     switch ($command) {
         case 'status':
-            echo $migrator->installed() ? "Schema version 1 installed.\n" : "Schema is not installed. Run migrate explicitly.\n";
+            echo $migrator->installed() ? 'Schema version ' . SchemaMigrator::VERSION . " installed.\n" : "Schema is not current. Run migrate explicitly.\n";
             break;
         case 'migrate':
             $migrator->migrate();
-            echo "Schema version 1 installed.\n";
+            echo 'Schema version ' . SchemaMigrator::VERSION . " installed.\n";
             break;
         case 'client:register':
             $context->admin->registerClient((string) ($options['id'] ?? ''), (string) ($options['name'] ?? ''),
