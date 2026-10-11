@@ -9,7 +9,7 @@ final readonly class Config
     public function __construct(
         public string $baseUrl,
         public string $name = 'Websonette application',
-        public string $version = '0.1.0',
+        public string $version = '0.2.0',
         public bool $development = false,
         public array $allowedOrigins = [],
         public int $maxBodyBytes = 1048576,

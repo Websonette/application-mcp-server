@@ -9,7 +9,7 @@ use Websonette\ApplicationMcpServer\Tool\ToolException;
 
 final readonly class Store
 {
-    public function __construct(public \PDO $pdo, private ClockInterface $clock)
+    public function __construct(public \PDO $pdo, private ClockInterface $clock, private ?TransactionManager $transactions = null)
     {
         $pdo->setAttribute(\PDO::ATTR_ERRMODE, \PDO::ERRMODE_EXCEPTION);
     }
@@ -44,6 +44,7 @@ final readonly class Store
         if ($this->pdo->inTransaction()) {
             throw new \LogicException('MCP dispatch owns its transaction. Invoke it outside an application transaction.');
         }
+        if ($this->transactions !== null) { return $this->transactions->run($operation); }
         $this->pdo->beginTransaction();
         try {
             $result = $operation();
@@ -76,8 +77,13 @@ final readonly class Store
 
     public function rateLimit(Principal $principal, int $limit): bool
     {
-        $key = $principal->key();
-        $window = intdiv($this->now(), 60);
+        return $this->hit('mcp', $principal->key(), $limit);
+    }
+
+    public function hit(string $bucket, string $subject, int $limit, int $seconds = 60): bool
+    {
+        $key = hash('sha256', $bucket . ':' . $subject);
+        $window = intdiv($this->now(), $seconds);
         if ($this->pdo->getAttribute(\PDO::ATTR_DRIVER_NAME) === 'sqlite') {
             $sql = 'INSERT INTO mcp_rate_limits (principal_key, window_id, hits) VALUES (:key, :window, 1) ON CONFLICT(principal_key) DO UPDATE SET hits = CASE WHEN window_id = :window2 THEN hits + 1 ELSE 1 END, window_id = :window3';
         } else {

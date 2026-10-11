@@ -12,7 +12,11 @@ PHP 8.3+, PSR-7 rozhraní, Nette DI extension, explicitní SQLite/MySQL migrace,
 
 Produkční přístup používá autorizační kód se S256 PKCE, lidský souhlas v hostitelské aplikaci, krátkodobé podepsané JWT pro konkrétní MCP resource a rotované refresh tokeny. Identifikátory tokenů se ukládají hashované a přístup lze okamžitě odvolat. Neprůhledné ručně vydané tokeny jsou pouze pro explicitní lokální vývoj.
 
-Klienti jsou předem registrovaní administrátorem s přesnými callback URL a scopes. Automatická registrace a vzdálené načítání klientských metadat nejsou hotové. Při replay refresh tokenu se v 0.1 záměrně odvolají všechny granty daného klienta; jde o konzervativnější, širší reakci než odvolání jedné grantové rodiny.
+Verze 0.2 podporuje předregistraci, CIMD s public-client PKCE a výslovně zapínané DCR. Metadata CIMD se načítají jen z veřejných HTTPS adres s omezením velikosti, času a ochranou proti DNS rebindingu; odvolaný klient se automaticky neobnovuje. Při replay refresh tokenu se záměrně odvolají všechny granty daného klienta, nikoli pouze jedna grantová rodina.
+
+Nette extension sestavuje OAuth služby, načítá klíče a přebírá existující Nette Database připojení i koordinaci transakcí. Projekt dodává ScopeProvider, IdentityProvider a ToolProvider. Jeden katalog scopes slouží protokolu, OAuth, administraci i schvalovací stránce; není potřeba druhý seznam v NEON.
+
+Výchozí český/anglický OAuth souhlas dodává balíček. Formuláře jsou vázané na session, přesný požadavek, identitu a zobrazená oprávnění; jsou jednorázové. Přihlášení zůstává napojené na existující účty projektu, nikoliv na nové účty balíčku.
 
 Čtecí tool pouze čte. Zápis vyžaduje idempotency key a stejný opakovaný požadavek vrací uložený výsledek. Citlivá operace navíc vyžaduje jednorázový lidský souhlas vázaný na klienta, uživatele, tool a přesné parametry. Hostitelská aplikace ověřuje aktuální uživatelská, tenantová a objektová oprávnění i očekávanou verzi záznamu.
 
@@ -20,7 +24,7 @@ Atomické záruky platí pro stejnou PDO transakci. Publikování do externího 
 
 ## Kontext, administrace a vývoj
 
-Resources nesou profil projektu a tone of voice, prompts pracovní postupy. Obsah je kontext, nikoli oprávnění. Administrace má služby pro registraci klientů, jejich přehled, aktivitu, tokeny, revokaci a odpojení; produkční UI, přihlášení a CSRF ochranu dodá aplikace.
+Resources nesou profil projektu a tone of voice, prompts pracovní postupy. Obsah je kontext, nikoli oprávnění. Administrace má služby pro registraci klientů, jejich přehled, aktivitu, tokeny, revokaci a odpojení; její projektové UI a doménové schvalování chrání aplikace. OAuth souhlas a jeho ochrany má výchozí implementaci v balíčku.
 
 Audit neukládá bearer tokeny, surové parametry ani detaily výjimek. Uložené výsledky pro idempotenci ale mohou obsahovat osobní data, proto vyžadují retenční a přístupovou politiku.
 

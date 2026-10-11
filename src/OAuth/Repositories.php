@@ -15,12 +15,21 @@ use League\OAuth2\Server\Repositories\RefreshTokenRepositoryInterface;
 use League\OAuth2\Server\Repositories\ScopeRepositoryInterface;
 use Websonette\ApplicationMcpServer\Config;
 use Websonette\ApplicationMcpServer\Persistence\Store;
+use Websonette\ApplicationMcpServer\Security\ScopeCatalog;
 
 final readonly class Repositories implements ClientRepositoryInterface, ScopeRepositoryInterface, AccessTokenRepositoryInterface, AuthCodeRepositoryInterface, RefreshTokenRepositoryInterface
 {
+    private RedirectContext $redirect;
     /** @param list<non-empty-string> $scopes */
-    public function __construct(private Store $store, private Config $config, public array $scopes)
+    public function __construct(private Store $store, private Config $config, public array|ScopeCatalog $scopes)
     {
+        $this->redirect = new RedirectContext();
+    }
+
+    public function redirectContext(?string $clientId, ?string $uri): void
+    {
+        $this->redirect->clientId = $clientId;
+        $this->redirect->uri = $uri;
     }
 
     public function getClientEntity(string $clientIdentifier): ?ClientEntityInterface
@@ -29,7 +38,26 @@ final readonly class Repositories implements ClientRepositoryInterface, ScopeRep
         if ($row === null || $clientIdentifier === '') { return null; }
         /** @var list<string> $redirects */
         $redirects = json_decode((string) $row['redirect_uris'], true, 32, JSON_THROW_ON_ERROR);
+        if ($this->redirect->clientId === $clientIdentifier && $this->redirect->uri !== null) {
+            $options = $this->store->row('SELECT application_type FROM mcp_client_metadata WHERE client_id = :id', ['id' => $clientIdentifier]);
+            if (($options['application_type'] ?? null) === 'native') {
+                foreach ($redirects as $registered) {
+                    if (self::nativeRedirectMatches($registered, $this->redirect->uri)) { $redirects[] = $this->redirect->uri; break; }
+                }
+            }
+        }
         return new Client($clientIdentifier, (string) $row['name'], $redirects, (bool) $row['confidential']);
+    }
+
+    public static function nativeRedirectMatches(string $registered, string $requested): bool
+    {
+        $a = parse_url($registered);
+        $b = parse_url($requested);
+        return is_array($a) && is_array($b) && ($a['scheme'] ?? '') === 'http' && ($b['scheme'] ?? '') === 'http'
+            && isset($a['host'], $b['host']) && $a['host'] === $b['host']
+            && in_array($a['host'], ['127.0.0.1', '[::1]', 'localhost'], true)
+            && !isset($b['user']) && !isset($b['pass']) && !isset($b['fragment'])
+            && ($a['path'] ?? '') === ($b['path'] ?? '') && ($a['query'] ?? '') === ($b['query'] ?? '');
     }
 
     public function validateClient(string $clientIdentifier, ?string $clientSecret, ?string $grantType): bool
@@ -41,7 +69,8 @@ final readonly class Repositories implements ClientRepositoryInterface, ScopeRep
 
     public function getScopeEntityByIdentifier(string $identifier): ?ScopeEntityInterface
     {
-        return in_array($identifier, $this->scopes, true) ? new Scope($identifier) : null;
+        if ($identifier === '') { return null; }
+        return in_array($identifier, $this->scopes instanceof ScopeCatalog ? $this->scopes->identifiers() : $this->scopes, true) ? new Scope($identifier) : null;
     }
 
     /**

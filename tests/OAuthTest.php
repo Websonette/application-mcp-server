@@ -20,6 +20,48 @@ use Websonette\ApplicationMcpServer\Tests\Support\DatabaseTestCase;
 
 final class OAuthTest extends DatabaseTestCase
 {
+    public function testDynamicAndCimdClientsCompleteRealPkceTokenExchange(): void
+    {
+        $clients = new \Websonette\ApplicationMcpServer\OAuth\ClientRegistration($this->store,
+            new \Websonette\ApplicationMcpServer\Security\ScopeCatalog(['read', 'write']), $this->admin, new TestFetcher(), true, true);
+        $this->oauth = new Server($this->config, $this->store, new Repositories($this->store, $this->config, ['read', 'write']),
+            self::$keyDirectory . '/private.pem', self::$keyDirectory . '/public.pem', str_repeat('test-encryption-key-', 3), $this->consent, $clients);
+        $registered = $clients->register(new ServerRequest('POST', $this->config->url('/oauth/register'), ['Content-Type' => 'application/json'],
+            json_encode(['client_name' => 'Native test', 'redirect_uris' => ['http://127.0.0.1/callback'],
+                'application_type' => 'native', 'token_endpoint_auth_method' => 'none'], JSON_THROW_ON_ERROR)));
+        $body = json_decode((string) $registered->getBody(), true, flags: JSON_THROW_ON_ERROR);
+        self::assertIsArray($body);
+        self::assertIsString($body['client_id']);
+        foreach ([
+            [$body['client_id'], 'http://127.0.0.1:54321/callback'],
+            ['https://chatgpt.com/oauth/client.json', 'https://chatgpt.com/connector_platform_oauth_redirect'],
+        ] as [$id, $redirect]) {
+            $response = $this->authorization(['client_id' => $id, 'redirect_uri' => $redirect]);
+            self::assertSame(302, $response->getStatusCode(), (string) $response->getBody());
+            parse_str((string) parse_url($response->getHeaderLine('Location'), PHP_URL_QUERY), $callback);
+            self::assertIsString($callback['code']);
+            $form = ['grant_type' => 'authorization_code', 'client_id' => $id, 'redirect_uri' => $redirect,
+                'code' => $callback['code'], 'code_verifier' => $this->verifier, 'resource' => $this->config->url('/mcp')];
+            self::assertSame(401, $this->token($form + ['client_secret' => 'unexpected'])->getStatusCode());
+            $token = $this->token($form);
+            self::assertSame(200, $token->getStatusCode(), (string) $token->getBody());
+            $data = json_decode((string) $token->getBody(), true, flags: JSON_THROW_ON_ERROR);
+            self::assertIsArray($data);
+            self::assertIsString($data['access_token']);
+            $principal = $this->auth->authenticate(new ServerRequest('POST', $this->config->url('/mcp'), ['Authorization' => 'Bearer ' . $data['access_token']]));
+            self::assertSame($id, $principal->clientId);
+            self::assertSame('human-user', $principal->userId);
+        }
+    }
+
+    public function testNativeRedirectMatchingNeverChangesHostPathOrQuery(): void
+    {
+        self::assertTrue(Repositories::nativeRedirectMatches('http://127.0.0.1/callback', 'http://127.0.0.1:4567/callback'));
+        foreach (['http://localhost:4567/callback', 'http://127.0.0.1:4567/other', 'http://127.0.0.1:4567/callback?x=1',
+            'http://user@127.0.0.1:4567/callback', 'http://127.0.0.1:4567/callback#x'] as $uri) {
+            self::assertFalse(Repositories::nativeRedirectMatches('http://127.0.0.1/callback', $uri));
+        }
+    }
     private static string $keyDirectory;
     private Server $oauth;
     private BearerAuthenticator $auth;
@@ -159,6 +201,7 @@ final class OAuthTest extends DatabaseTestCase
         self::assertSame(302, $unknown->getStatusCode());
         self::assertStringStartsWith('http://127.0.0.1:9999/callback?', $unknown->getHeaderLine('Location'));
         self::assertStringContainsString('error=invalid_scope', $unknown->getHeaderLine('Location'));
+        self::assertStringContainsString('iss=https%3A%2F%2Fapplication.example', $unknown->getHeaderLine('Location'));
         $redirect = $this->authorization(['redirect_uri' => 'https://evil.example/callback']);
         self::assertSame(401, $redirect->getStatusCode());
         self::assertSame('', $redirect->getHeaderLine('Location'));

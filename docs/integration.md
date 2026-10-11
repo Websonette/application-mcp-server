@@ -1,18 +1,10 @@
-# Application integration
+# Application integration (0.2)
 
-The core is framework-neutral. Instantiate Config, Store, Registry, Catalog, Approvals and Dispatcher; then construct OAuth Server, BearerAuthenticator and Http Handler as in [the demo app](../examples/dev-app/app.php).
+The core remains framework-neutral. Nette supplies a ready-to-wire OAuth and HTTP integration; applications provide identities, scope definitions and business tools.
 
-Expose these exact routes through a PSR-7 bridge:
+## Nette
 
-- `/mcp`: Streamable HTTP; authenticated for every request.
-- `/.well-known/oauth-protected-resource/mcp` and `/.well-known/oauth-protected-resource`: resource discovery.
-- `/.well-known/oauth-authorization-server`: OAuth issuer discovery.
-- `/oauth/authorize`: application login and human consent.
-- `/oauth/token`: form-encoded authorization-code and refresh exchange.
-
-Config baseUrl is an origin, not a subdirectory. Mounting at a custom path is not supported in 0.1. Do not add a public token issue or approval issue tool.
-
-## Nette DI
+Install nette/database ^3.2, nette/http ^3.3 and nette/security ^3.2 when using their adapters.
 
 ```neon
 extensions:
@@ -20,62 +12,74 @@ extensions:
 
 mcp:
     baseUrl: https://app.example
-    pdo: @applicationPdo
-    authenticator: @mcpBearer
-    oauth: @mcpOAuth
-    scopes: [project:read, properties:read, properties:write, properties:publish]
+    database: @Nette\Database\Explorer
+    keys:
+        directory: %rootDir%/config/keys
+    scopes: @applicationScopes
+    identity: @applicationIdentity
+    consent:
+        locale: en
+    oauth:
+        clients:
+            cimd: true
+            dcr: true
 
 services:
-    applicationPdo:
-        factory: PDO(%mcpDsn%, %mcpUser%, %mcpPassword%)
-
-    consent:
-        factory: App\Mcp\ConsentAdapter
-
-    oauthRepositories:
-        factory: Websonette\ApplicationMcpServer\OAuth\Repositories
-        arguments: [@mcp.store, @mcp.config, [project:read, properties:read, properties:write, properties:publish]]
-
-    mcpOAuth:
-        factory: Websonette\ApplicationMcpServer\OAuth\Server
-        arguments: [@mcp.config, @mcp.store, @oauthRepositories, %mcpPrivateKey%, %mcpPublicKey%, %mcpEncryptionKey%, @consent]
-
-    mcpResource:
-        factory: @mcpOAuth::getResourceServer()
-
-    mcpBearer:
-        factory: Websonette\ApplicationMcpServer\OAuth\BearerAuthenticator
-        arguments: [@mcpResource, @mcp.store, @mcp.config, @mcp.tokens]
-
-    propertyTools:
-        factory: App\Mcp\PropertyTools
+    applicationScopes: App\Mcp\Scopes
+    applicationIdentity: App\Mcp\Identity
+    businessTools: App\Mcp\Tools
 ```
 
-The application supplies the referenced services, PDO credentials and private key locations. Production secrets should be loaded through the application's secret-management layer; protect compiled DI caches, too.
+database accepts PDO, Nette Database Connection or Explorer. If omitted, the extension uses the unique Connection (or PDO when Nette Database is unavailable). Select a service explicitly when the application has several connections. No second DSN or SharedPdo class is needed.
 
-Services implementing Integration\\ToolProvider are collected and registered once when `mcp.http` is first obtained. The extension does not discover arbitrary application methods or migrate the database. Route a trusted PSR-7 request to `mcp.http->handle()` and emit the returned PSR-7 response using the application's HTTP bridge. No Nette presenter/router is silently installed.
+keys.directory loads private.pem, public.pem and encryption.key at runtime, never during DI compilation. Generate them explicitly with websonette-mcp keys; the extension never generates or replaces them.
 
-A development-only container can set `development: true`, use a loopback baseUrl and `authenticator: @mcp.tokens` without OAuth. Do not use that authenticator in production.
+scopes accepts one ScopeProvider service or a simple list of IDs. ScopeProvider::getScopes() yields ScopeDefinition(id, label, description). Constants or a backed enum may identify scopes in business tools; there is no second ALL list or OAuth scope configuration. The catalog validates every registered tool/resource/prompt scope. Administration, OAuth, discovery, consent and the console use the same catalog.
 
-## Explicit setup
+identity references IdentityProvider: currentUser, login and allowedScopes. login must authenticate through the host application's existing system and renew its session. allowedScopes returns the user's current delegation ceiling. If identity is omitted, NetteIdentityProvider uses Nette Security User, its authenticator and authorizator: resource "mcp", privilege equal to the scope ID. It does not grant all scopes automatically.
 
-Have `mcp-bootstrap.php` return Console\\Context with the same Config and Store as your application. Protect this operator-only file and do not serve it as a public endpoint.
+Consent defaults to English (en); Czech (cs) is included. A custom ConsentRenderer or ConsentState may be selected under consent.renderer/state. State must be browser-session-bound, expiring, single-use and bound to the exact client, callback, state, PKCE challenge, resource, subject and displayed permissions. The built-in SessionConsentState handles this with Nette Session. Lost/expired sessions require restarting consent; no unsigned or session-less approval fallback exists.
+
+The extension constructs config, clock, database/pdo, store, migrator, scopes, keys, consent, OAuth repositories/server/resource/bearer, client registration, dispatcher, admin, tokens, console and HTTP services. ToolProvider services are collected automatically. Legacy pdo/authenticator/oauth service references and scope lists from 0.1 remain supported; automatic OAuth requires keys.directory.
+
+## HTTP and deployment
+
+Expose:
+- /mcp
+- /.well-known/oauth-protected-resource and /.well-known/oauth-protected-resource/mcp
+- /.well-known/oauth-authorization-server
+- /oauth/authorize and /oauth/token
+- /oauth/register when DCR is enabled
+
+When Nette IRequest is available the extension registers Integration\HttpApplication. An existing front controller can call:
+
+```php
+$container = App\Bootstrap::boot();
+$container->getByType(Websonette\ApplicationMcpServer\Integration\HttpApplication::class)->run();
+```
+
+Route the listed paths to that front controller in the web server, or invoke the PSR-7 mcp.http handler from an existing application controller. Routes are not silently inserted into the host's router. The bridge uses Nette's trusted HTTP request factory; configure trusted proxies there. Never blindly rewrite Host/scheme or trust client-supplied forwarded headers.
+
+baseUrl is the canonical HTTPS origin (development allows loopback HTTP), not a subdirectory. allowedOrigins are explicit browser origins, not client identities or OAuth callbacks; leave them empty unless cross-origin browser requests are needed.
+
+## Explicit setup and upgrades
+
+Have a protected CLI bootstrap return the registered Console\Context. Composer installation and HTTP requests never migrate the database.
 
 ```sh
+php vendor/bin/websonette-mcp keys --directory=/private/application-mcp-keys
 php vendor/bin/websonette-mcp status --bootstrap=/private/mcp-bootstrap.php
 php vendor/bin/websonette-mcp migrate --bootstrap=/private/mcp-bootstrap.php
-php vendor/bin/websonette-mcp keys --directory=/private/application-mcp-keys
-php vendor/bin/websonette-mcp client:register --bootstrap=/private/mcp-bootstrap.php --id=desktop-client --name=Desktop --redirect=http://127.0.0.1:9999/callback --scopes=project:read,properties:read
 ```
 
-Keys are generated with restrictive permissions and never overwritten. The private PEM signs access tokens; public PEM verifies them; encryption.key protects authorization codes and refresh-token payloads. Load the encryption key's contents, not its filename, into OAuth Server.
+Back up the database before deployment. Migration 2 expands client IDs for metadata URLs and adds client metadata/authentication options, preserving package-0.1 clients, tokens and audit. Incompatible legacy tables are rejected before changes; use a separately reviewed application migration, never automatic DROP TABLE. MySQL DDL is not transactionally reversible. Automatic-OAuth endpoints return schema_upgrade_required until migration 2 is installed.
 
-Back up the database before migrations. Version 1 DDL is repeatable; MySQL DDL cannot be rolled back transactionally.
+## Business guarantees
 
-## Business capabilities
+Write handlers must use the same connection. With Nette, Store owns the outer Nette transaction and ordinary nested Nette transaction() callbacks participate in it. Do not invoke dispatch inside an already active application transaction or manually commit/rollback the dispatch-owned transaction. External writes, files, e-mails and queues need application outbox/compensation and their own idempotence.
 
-Use scoped resources for `project://profile` and `project://tone-of-voice`, and prompts for workflows. All catalog loaders receive Principal and must enforce current object/tenant permissions if they return private data.
+Current user, tenant and object permissions still belong in business handlers. OAuth consent is delegation, not a replacement for live ACLs. Refresh does not rerun login/consent.
 
-Read tools must not mutate business state. Writes need an idempotency key and optimistic expected_version checks. Sensitive tools need a ticket from Approvals\\issue, called only by the application's authenticated, authorized human approval UI after showing the exact domain parameters. Validate CSRF and the approver's permissions before issuing.
+Sensitive tools need exact single-use tickets from Approvals::issue. The application's authenticated human UI must display domain parameters/version, enforce CSRF and approver ACLs before issuing; a model's confirm flag is not human authorization.
 
-Admin\\Administration is a trusted facade, **not an authenticated controller**. Build your admin UI with current administrator checks and CSRF protection, and pass the real actor ID to mutation methods. Listings return token identifier hashes, never bearer credentials. Do not expose the facade directly through MCP.
+Administration is a trusted facade, not an authenticated HTTP controller. Keep its host-admin access checks and CSRF protections, and pass the real actor ID.

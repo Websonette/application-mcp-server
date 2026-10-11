@@ -24,6 +24,7 @@ use Websonette\ApplicationMcpServer\Security\AuthenticationException;
 use Websonette\ApplicationMcpServer\Security\Authenticator;
 use Websonette\ApplicationMcpServer\Security\Principal;
 use Websonette\ApplicationMcpServer\Security\Scopes;
+use Websonette\ApplicationMcpServer\Security\ScopeCatalog;
 use Websonette\ApplicationMcpServer\Tool\Dispatcher;
 use Websonette\ApplicationMcpServer\Tool\Registry;
 use Websonette\ApplicationMcpServer\Tool\Risk;
@@ -39,11 +40,13 @@ final readonly class Handler implements RequestHandlerInterface
         private Registry $registry,
         private Dispatcher $dispatcher,
         private Catalog $catalog,
-        private array $scopes,
+        private array|ScopeCatalog $scopes,
         private ?Server $oauth = null,
     ) {
-        Scopes::validate($scopes);
+        Scopes::validate($this->scopeIds());
     }
+    /** @return list<string> */
+    private function scopeIds(): array { return $this->scopes instanceof ScopeCatalog ? $this->scopes->identifiers() : $this->scopes; }
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
@@ -78,17 +81,21 @@ final readonly class Handler implements RequestHandlerInterface
         }
         if ($request->getMethod() === 'GET' && in_array($path, ['/.well-known/oauth-protected-resource', '/.well-known/oauth-protected-resource/mcp'], true)) {
             return $this->json(200, ['resource' => $this->config->url('/mcp'), 'authorization_servers' => [rtrim($this->config->baseUrl, '/')],
-                'scopes_supported' => $this->scopes, 'bearer_methods_supported' => ['header'], 'resource_name' => $this->config->name]);
+                'scopes_supported' => $this->scopeIds(), 'bearer_methods_supported' => ['header'], 'resource_name' => $this->config->name]);
         }
         if ($request->getMethod() === 'GET' && $path === '/.well-known/oauth-authorization-server') {
+            if ($this->oauth !== null) { return $this->json(200, $this->oauth->metadata()); }
             return $this->json(200, ['issuer' => rtrim($this->config->baseUrl, '/'), 'authorization_endpoint' => $this->config->url('/oauth/authorize'),
                 'token_endpoint' => $this->config->url('/oauth/token'), 'response_types_supported' => ['code'],
                 'grant_types_supported' => ['authorization_code', 'refresh_token'], 'code_challenge_methods_supported' => ['S256'],
                 'token_endpoint_auth_methods_supported' => ['none', 'client_secret_basic', 'client_secret_post'],
-                'scopes_supported' => $this->scopes, 'authorization_response_iss_parameter_supported' => true]);
+                'scopes_supported' => $this->scopeIds(), 'authorization_response_iss_parameter_supported' => true]);
         }
-        if ($path !== '/mcp' && !in_array($path, ['/oauth/authorize', '/oauth/token'], true)) {
+        if ($path !== '/mcp' && !in_array($path, ['/oauth/authorize', '/oauth/token', '/oauth/register'], true)) {
             return $this->json(404, ['error' => 'not_found']);
+        }
+        if ($this->oauth?->clients !== null && !(new \Websonette\ApplicationMcpServer\Persistence\SchemaMigrator($this->store->pdo))->installed()) {
+            return $this->json(503, ['error' => 'schema_upgrade_required']);
         }
         $stream = $request->getBody();
         if ($stream->isSeekable()) { $stream->rewind(); }
@@ -102,6 +109,13 @@ final readonly class Handler implements RequestHandlerInterface
         $request = $request->withBody($factory->createStream($body));
         if ($path !== '/mcp') {
             if ($this->oauth === null) { return $this->json(503, ['error' => 'oauth_not_configured']); }
+            if ($path === '/oauth/register') {
+                return $this->oauth->clients?->register($request) ?? $this->json(404, ['error' => 'not_found']);
+            }
+            $ip = $request->getServerParams()['REMOTE_ADDR'] ?? 'unknown';
+            if (!$this->store->hit('oauth_public:' . $path, is_string($ip) ? $ip : 'unknown', 60)) {
+                return $this->json(429, ['error' => 'rate_limited'])->withHeader('Retry-After', '60');
+            }
             if ($request->getMethod() === 'POST' && $request->getParsedBody() === null
                 && strtolower(explode(';', $request->getHeaderLine('Content-Type'))[0]) === 'application/x-www-form-urlencoded') {
                 parse_str($body, $form);

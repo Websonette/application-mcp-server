@@ -5,36 +5,33 @@ namespace Websonette\ApplicationMcpServer\Admin;
 use Websonette\ApplicationMcpServer\Persistence\Store;
 use Websonette\ApplicationMcpServer\Security\Principal;
 use Websonette\ApplicationMcpServer\Security\Scopes;
+use Websonette\ApplicationMcpServer\Security\ScopeCatalog;
 
 final readonly class Administration
 {
-    public function __construct(private Store $store) {}
+    public function __construct(private Store $store, private ?ScopeCatalog $catalog = null) {}
 
     /**
      * @param list<string> $redirectUris
      * @param list<string> $scopes
+     * @param (\Closure(): void)|null $onRegistered Trusted persistence hook, inside the registration transaction.
      */
-    public function registerClient(string $id, string $name, array $redirectUris, array $scopes, #[\SensitiveParameter] ?string $secret = null, string $actorId = 'operator'): void
+    public function registerClient(string $id, string $name, array $redirectUris, array $scopes, #[\SensitiveParameter] ?string $secret = null, string $actorId = 'operator', ?\Closure $onRegistered = null): void
     {
-        if ($id === '' || strlen($id) > 128 || $name === '' || $scopes === []) {
+        if ($id === '' || strlen($id) > 512 || !preg_match('/^[\\x21-\\x7e]+$/D', $id) || $name === '' || strlen($name) > 255 || $scopes === []) {
             throw new \InvalidArgumentException('Client identifier, name and scopes are required.');
         }
         Scopes::validate($scopes);
+        $this->catalog?->validate($scopes);
         if ($secret !== null && strlen($secret) < 32) { throw new \InvalidArgumentException('Client secrets must contain at least 32 bytes.'); }
-        foreach ($redirectUris as $uri) {
-            $p = parse_url($uri);
-            if ($p === false || isset($p['fragment']) || isset($p['user']) || isset($p['pass'])
-                || !isset($p['host']) || !(($p['scheme'] ?? '') === 'https'
-                    || (($p['scheme'] ?? '') === 'http' && in_array($p['host'], ['127.0.0.1', '[::1]', 'localhost'], true)))) {
-                throw new \InvalidArgumentException('Redirects must be exact HTTPS URLs or loopback HTTP URLs.');
-            }
-        }
-        $this->store->transaction(function () use ($id, $name, $redirectUris, $scopes, $secret, $actorId): void {
+        self::validateRedirectUris($redirectUris);
+        $this->store->transaction(function () use ($id, $name, $redirectUris, $scopes, $secret, $actorId, $onRegistered): void {
             $this->store->execute('INSERT INTO mcp_clients (id, name, redirect_uris, scopes, secret_hash, confidential, revoked, created_at) VALUES (:id, :name, :redirects, :scopes, :secret, :confidential, 0, :time)',
                 ['id' => $id, 'name' => $name, 'redirects' => json_encode($redirectUris, JSON_THROW_ON_ERROR),
                     'scopes' => json_encode($scopes, JSON_THROW_ON_ERROR), 'secret' => $secret === null ? null : password_hash($secret, PASSWORD_DEFAULT),
                     'confidential' => $secret === null ? 0 : 1, 'time' => $this->store->now()]);
             $this->store->audit(new Principal($id, $actorId, []), 'client_register', 'success', bin2hex(random_bytes(16)));
+            if ($onRegistered !== null) { $onRegistered(); }
         });
     }
 
@@ -47,6 +44,20 @@ final readonly class Administration
             $this->store->execute('UPDATE mcp_authorization_codes SET revoked = 1 WHERE client_id = :id', ['id' => $clientId]);
             $this->store->audit(new Principal($clientId, $actorId, []), 'client_disconnect', 'success', bin2hex(random_bytes(16)));
         });
+    }
+
+    /** @param list<string> $redirectUris */
+    public static function validateRedirectUris(array $redirectUris): void
+    {
+        foreach ($redirectUris as $uri) {
+            if (strlen($uri) > 2048 || preg_match('/[\\x00-\\x20\\x7f]/', $uri)) { throw new \InvalidArgumentException('Invalid redirect URI.'); }
+            $p = parse_url($uri);
+            if ($p === false || isset($p['fragment']) || isset($p['user']) || isset($p['pass'])
+                || !isset($p['host']) || !(($p['scheme'] ?? '') === 'https'
+                    || (($p['scheme'] ?? '') === 'http' && in_array($p['host'], ['127.0.0.1', '[::1]', 'localhost'], true)))) {
+                throw new \InvalidArgumentException('Redirects must be exact HTTPS URLs or loopback HTTP URLs.');
+            }
+        }
     }
 
     /** Accepts the stored identifier hash from the admin listing, never a bearer credential. */

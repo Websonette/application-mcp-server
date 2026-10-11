@@ -1,37 +1,41 @@
 # OAuth integration
 
-Production uses the maintained League OAuth2 server, restricted to authorization code and refresh-token grants. The application implements OAuth\\ConsentAdapter; the package does not own accounts or auto-approve humans.
+Production uses League OAuth2 Server with authorization-code + mandatory S256 PKCE and rotating refresh grants. The Nette extension constructs the full chain and supplies session-bound consent UI. IdentityProvider connects the application's existing accounts; legacy/custom ConsentAdapter remains supported.
 
-## Flow and discovery
+## Identification and registration
 
-1. A missing/invalid bearer receives HTTP 401 with WWW-Authenticate pointing to resource metadata.
-2. The client discovers the application issuer and its authorization/token endpoints.
-3. An administrator pre-registers the client ID, exact callback(s) and allowed scopes.
-4. The client starts authorization with response_type=code, scope, random state, an S256 code_challenge and resource equal to the canonical /mcp URL.
-5. The adapter authenticates the human, shows the verified client and requested permissions, checks current user ACLs, validates CSRF on approval, and returns OAuth\\User. It can reduce the AuthorizationRequest scopes before returning the user. A login/consent page or denial is returned as a PSR response.
-6. The client validates callback state and issuer, then exchanges the code with code_verifier and the same redirect_uri/resource.
-7. The client sends the access token only in the Authorization: Bearer header.
+CIMD is enabled by default in automatic OAuth; DCR is opt-in. Pre-registration remains available through trusted administration. Registration never issues a user token or bypasses human consent.
 
-The authorization redirect includes the issuer parameter. Callback fragments, credentials and non-loopback HTTP URLs are rejected at registration. S256 is mandatory for public **and** confidential clients; missing challenges and plain PKCE are rejected.
+CIMD accepts an exact HTTPS client_id metadata URL up to 512 ASCII bytes. Fetching is limited to port 443, public DNS addresses, verified TLS, 64 KiB and 5 seconds; redirects, proxies, credentials, query/fragment URLs and IP-literal hosts are rejected. DNS is pinned for the connection against rebinding. oauth.clients.allowedHosts can restrict exact lowercase hosts. Failed fetches fail closed, not back to arbitrary redirect acceptance.
 
-Access tokens are signed RSA JWTs, with issuer, canonical resource audience, client_id, subject, scopes, expiry and a unique token ID. The DB stores only hashed token IDs, not bearer strings. Signature alone is insufficient: each request also verifies current token/client status. No token passthrough to downstream services is supported.
+The document's client_id must exactly match. Public-client PKCE (none) is supported. The plural token_endpoint_auth_methods_supported field is preferred over the legacy singular field; none must be an available method. private_key_jwt/JWKS verification is not implemented or advertised. Validated metadata is cached for one hour, refreshed only at authorization, not fetched during token exchange. A revoked client is never recreated automatically. Explicit pre-registration is authoritative.
 
-For compatibility, an omitted resource parameter still issues only for this server's fixed resource. A supplied different resource is rejected.
+DCR POST /oauth/register accepts a bounded JSON object with redirect_uris, optional client_name, scope, application_type (web/native), grant_types, response_types and token_endpoint_auth_method. Supported methods are none, client_secret_basic and client_secret_post. The RFC default is client_secret_basic; confidential secrets are generated randomly, returned once, stored only hashed and do not expire automatically. Only authorization_code/refresh_token and response_type code are accepted. Unknown scopes and unsupported flows are rejected.
 
-## Expiry, rotation and revocation
+The registration quota is 10 attempts/IP/minute, 100 global/minute and at most 10,000 stored clients. Failed attempts count. Configure edge limits and registration policy for your exposure. Client names and branding are untrusted text; registration alone does not establish trusted client identity. Open DCR is not an OpenAI identity check.
 
-Authorization code: 5 minutes, single redemption. Access token: 15 minutes. Refresh token: 30 days and replaced on each refresh. The server owns a transaction during redemption; MySQL rows are locked through validation/issuance and SQLite conflicting writers must retry. An invalid verifier does not consume a valid authorization code.
+Web callbacks require exact HTTPS URIs. Native applications may use loopback HTTP; only the port varies at authorization, with host/path/query unchanged. Credentials and fragments are rejected. Existing 0.1 manual registrations retain exact loopback callback behavior.
 
-On detected refresh replay, 0.1 conservatively revokes **all access and refresh grants for the client**, including other users of that client. This is broader than grant-family revocation and can interrupt legitimate sessions; reconnect through fresh consent. The replay outcome is audited. Do not remove replay records prematurely.
+## Discovery and flow
 
-Admin client disconnect also revokes authorization codes. Individual token revocation invalidates associated refresh access. Current object/tenant/user permissions must still be checked in application tool handlers; a refresh grant does not itself re-run the consent adapter.
+Protected resource metadata points to the application's canonical issuer and /mcp resource. OAuth metadata advertises only enabled registration mechanisms. Missing/invalid bearer credentials receive WWW-Authenticate with resource_metadata.
 
-A known restricted tool/resource/prompt returns HTTP 403 with error=insufficient_scope and its required scope set. Lists include only delegated capabilities. A client must explicitly request new permissions through authorization; the server never silently expands scopes.
+The client sends random state, resource and S256 code_challenge. The host authenticates the user and displays the client ID and permission descriptions. Consent is an explicit POST protected by expiring single-use browser-session state bound to the exact request, user and displayed scope ceiling. Lost sessions, tampering, replay or changed delegation permissions fail closed. Denial and successful/error authorization redirects include iss; clients must validate it.
 
-## Not included
+A supplied resource must equal the canonical /mcp URI; omitting it still issues only for that fixed resource. The token endpoint enforces the registered authentication method for DCR/CIMD clients. Tokens have RSA signatures, issuer, resource audience, client_id, subject, scopes, expiry and unique IDs. The database stores hashed token IDs, not bearer strings. Every MCP request verifies token/client status as well as signature, audience and expiry. No token passthrough occurs.
 
-Automatic dynamic client registration, CIMD fetching, JWKS publication, OIDC login, central IdP, token introspection/revocation HTTP endpoints, client-credentials grant and production consent UI are not implemented. They are not advertised in metadata. Use trusted admin services for revocation.
+## Expiry, revocation and limits
 
-Authorization endpoint abuse, login brute-force and unauthenticated token requests need reverse-proxy/application rate limits. The built-in minute limiter protects authenticated MCP requests, not the public login flow.
+Authorization codes: 5 minutes and single redemption. Access tokens: 15 minutes. Refresh tokens: 30 days, rotated on use. Redemption owns a transaction with MySQL row locks or SQLite conflict retry; a wrong PKCE verifier does not consume a valid code.
 
-References: [MCP authorization](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization), [League OAuth2 server](https://oauth2.thephpleague.com/), [RFC 8707 resource indicators](https://www.rfc-editor.org/rfc/rfc8707).
+Refresh replay conservatively revokes all access/refresh grants for the client, including other users. This is broader than grant-family revocation. Disconnect also revokes authorization codes. Retain replay records appropriately.
+
+Public authorize/token endpoints are limited to 60 requests/IP/minute. The built-in login limits are 8 attempts/IP/15 minutes. Reverse-proxy limits remain advisable. REMOTE_ADDR is used, not unvalidated forwarded headers.
+
+OAuth grants do not replace current object, tenant and user ACLs in handlers. Refresh does not rerun consent. A scope challenge requires explicit step-up authorization; scopes are never silently expanded.
+
+## Host responsibilities and exclusions
+
+The package does not own accounts, provide OIDC login/userinfo, verify CIMD private_key_jwt, support client credentials, or silently install an admin UI. Host applications protect admin/revocation and domain approval endpoints with live ACLs and CSRF.
+
+References: [OpenAI OAuth](https://developers.openai.com/plugins/build/auth), [MCP authorization](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization), [League OAuth2 Server](https://oauth2.thephpleague.com/), [RFC 7591](https://www.rfc-editor.org/rfc/rfc7591).

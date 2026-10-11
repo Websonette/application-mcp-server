@@ -42,4 +42,4 @@ Successful write results are cached for idempotency and can contain personal dat
 
 ## Registration policy
 
-Clients are pre-registered by an authorized application administrator, with exact HTTPS or loopback callback URLs and a scope ceiling. Public clients require PKCE; confidential clients additionally use a hashed secret. No arbitrary URL is fetched during registration. CIMD/DCR needs a separate trust/SSRF design before implementation.
+Clients use pre-registration, public-client CIMD or opt-in DCR. PKCE is mandatory. CIMD fetches only bounded public HTTPS documents with DNS pinning and strict client_id/callback validation; DCR does not fetch supplied branding URLs. Confidential DCR clients use hashed secrets and their registered authentication method. Registration is not user authorization. See [OAuth](oauth.md).

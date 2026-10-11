@@ -3,9 +3,9 @@
 [![CI](https://github.com/Websonette/application-mcp-server/actions/workflows/ci.yml/badge.svg)](https://github.com/Websonette/application-mcp-server/actions/workflows/ci.yml)
 [![MySQL](https://github.com/Websonette/application-mcp-server/actions/workflows/mysql.yml/badge.svg)](https://github.com/Websonette/application-mcp-server/actions/workflows/mysql.yml)
 
-A Composer package for adding an authorized MCP endpoint to an existing PHP application. The application owns its tools, users, consent UI, data and business permissions. No central Websonette identity service is required.
+A Composer package for adding an authorized MCP endpoint to an existing PHP application. The package supplies OAuth and a default consent UI; the application owns its users, data and business permissions. No central Websonette identity service is required.
 
-PHP 8.3+, SQLite or MySQL/MariaDB, PSR-7 HTTP adapter; optional Nette DI integration. MIT licensed. The initial 0.1 API is experimental.
+PHP 8.3+, SQLite or MySQL/MariaDB, PSR-7 HTTP adapter; optional Nette integration. MIT licensed. The 0.x API is experimental.
 
 ## What is included
 
@@ -16,6 +16,8 @@ PHP 8.3+, SQLite or MySQL/MariaDB, PSR-7 HTTP adapter; optional Nette DI integra
 - Transactional write idempotency; sensitive operations require exact, expiring, single-use human approval.
 - Audit/admin services, rate and body limits, exact Host/Origin policy, explicit SQLite/MySQL migrations.
 - A Nette extension, a runnable local demo and an explicitly installed, provider-neutral development Agent Skill.
+- Automatic Nette OAuth wiring, shared database transactions, one scope catalog and session-bound English/Czech consent.
+- CIMD client identification and optional DCR, including native loopback callbacks and registration quotas.
 
 This is an integration library, not a ready-made business application. See [architecture](docs/architecture.md) and the [Czech solution summary](docs/solution.cs.md).
 
@@ -25,10 +27,10 @@ Until the package is submitted to Packagist, use the GitHub VCS repository:
 
 ```sh
 composer config repositories.websonette-mcp vcs https://github.com/Websonette/application-mcp-server
-composer require websonette/application-mcp-server:^0.1
+composer require websonette/application-mcp-server:^0.2
 ```
 
-The release tag must exist before requiring `^0.1`; for development use `dev-main`.
+The release tag must exist before requiring `^0.2`; for development use `dev-main`.
 
 After registry publication, the VCS configuration is unnecessary. The package never modifies your database, generates keys or installs assistant instructions during Composer installation.
 
@@ -110,4 +112,4 @@ This runs strict Composer validation, PHPUnit, PHPStan level 8 and dependency au
 
 MCP is independent of implementation language. Transport and authorization support still matter: a client must support the endpoint's transport, protocol revision and registered OAuth flow. A Node.js, PHP or Python implementation is not automatically compatible with every client.
 
-Version 0.1 provides HTTP integration and pre-registered clients. It does **not** include an stdio executable server, legacy HTTP+SSE transport, automatic DCR/CIMD registration, a production login/admin UI, remote side-effect compensation, a connection to reality-profesionalne.cz or Packagist registration. These are not implied by the package name. See [roadmap](docs/roadmap.md).
+Version 0.2 provides HTTP integration, pre-registration, public-client CIMD and optional DCR. It does **not** include stdio, legacy HTTP+SSE, CIMD private_key_jwt, an account system, an application-specific admin UI or remote side-effect compensation. Host login and current business ACLs remain application responsibilities. See [integration](docs/integration.md) and [roadmap](docs/roadmap.md).
